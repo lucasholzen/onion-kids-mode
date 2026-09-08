@@ -742,8 +742,11 @@ state_write() { # $1 used, $2 bonus
 
 # Recompute and publish remaining seconds right now (clamped to >= 0;
 # file absent = timer off). Called by the ticker and after menu changes.
-# NB: the budget is per SESSION (set at arm / extended via Add play time);
-# there is no daily reset — a new arm starts a fresh budget.
+# NB: by default the budget is per-session (set at arm / extended via
+# Add play time). If `daily_timer` is enabled in the config, the
+# configured minutes represent a daily allowance and the used counter
+# is reset at local midnight; add-time still applies only to the
+# current day.
 update_remaining_now() {
     daily_state_reset_if_needed
     budget=$(($(get_timer_minutes) * 60 + $(state_bonus)))

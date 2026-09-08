@@ -510,9 +510,8 @@ static void fillRect(int x, int y, int w, int h, uint32_t color)
 static void renderBase(void)
 {
     SDL_Surface *bg = theme_background();
-    SDL_Rect pos = {0, 0, g_display.width, g_display.height};
     if (bg != NULL)
-        SDL_BlitSurface(bg, NULL, screen, &pos);
+        SDL_BlitSurface(bg, NULL, screen, NULL);
     else
         fillRect(0, 0, g_display.width, g_display.height, FALLBACK_BG);
 }
@@ -947,7 +946,8 @@ static void renderPickTimer(const char *title, int minutes, bool no_off,
              theme()->list.color, g_display.width - 40);
 
     theme_renderFooter(screen);
-    theme_renderStandardHint(screen, no_off ? "CONFIRM" : "START",
+    /* Hint: MENU toggles the daily-refresh state. Keep concise for footer. */
+    theme_renderStandardHint(screen, "MENU:Daily",
                              no_off ? "CANCEL" : "NO TIMER");
 }
 

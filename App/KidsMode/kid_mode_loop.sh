@@ -56,6 +56,7 @@ ticker_pid_file=/tmp/kidmode_ticker.pid
 uiresult=/tmp/kidmode_ui_result
 autoresume_result=/tmp/kidmode_autoresume_result
 brightness_result=/tmp/kidmode_brightness_result
+daily_timer_result=/tmp/kidmode_daily_timer_result
 uilog=/tmp/kidmode_ui_log
 
 export LD_LIBRARY_PATH="/lib:/config/lib:$miyoodir/lib:$sysdir/lib:$sysdir/lib/parasyte"
@@ -201,9 +202,30 @@ ensure_config() {
             cp "$configfile" "$backupdir/kidmode.json.broken" 2> /dev/null
             log "kidmode.json had invalid JSON; reset to defaults. Broken copy saved to $backupdir/kidmode.json.broken — check it for a missing/extra comma."
         fi
-        printf '{\n    "pin_hash": "",\n    "pin_salt": "",\n    "pin_plain": ""\n}\n' > "$configfile"
+        printf '{\n    "pin_hash": "",\n    "pin_salt": "",\n    "pin_plain": "",\n    "daily_timer": false\n}\n' > "$configfile"
         config_cached=0
     fi
+}
+
+get_daily_timer() {
+    v="$(config_get daily_timer)"
+    case "$v" in
+        true|1|yes|on) echo 1 ;;
+        *) echo 0 ;;
+    esac
+}
+
+set_daily_timer() {
+    case "$1" in
+        1|true|TRUE|yes|on)
+            config_merge '.daily_timer = true'
+            log "Daily timer enabled."
+            ;;
+        *)
+            config_merge '.daily_timer = false'
+            log "Daily timer disabled."
+            ;;
+    esac
 }
 
 config_merge() {
@@ -645,6 +667,16 @@ timer_max=120
 # level the parent chose. Absent = leave the screen alone.
 # (There is no volume equivalent: see the note in apply_brightness.)
 
+daily_state_reset_if_needed() {
+    [ "$(get_daily_timer)" = "1" ] || return 0
+    today="$(date +%Y-%m-%d)"
+    state_read
+    if [ -n "$st_day" ] && [ "$st_day" != "$today" ]; then
+        state_write 0 0
+        log "Daily timer reset for new day: $today"
+    fi
+}
+
 get_brightness_pct() {
     v="$(config_get brightness_pct)"
     case "$v" in
@@ -713,6 +745,7 @@ state_write() { # $1 used, $2 bonus
 # NB: the budget is per SESSION (set at arm / extended via Add play time);
 # there is no daily reset — a new arm starts a fresh budget.
 update_remaining_now() {
+    daily_state_reset_if_needed
     budget=$(($(get_timer_minutes) * 60 + $(state_bonus)))
     if [ "$budget" -le 0 ]; then
         rm -f "$remaining_file"
@@ -1116,8 +1149,8 @@ ensure_fav_shortcut() {
 
 pick_session_timer() {
     log "launcher: starting kidui (timer picker)"
-    rm -f "$uiresult"
-    "$kidui_bin" --pick-timer > "$uilog" 2>&1
+    rm -f "$uiresult" "$daily_timer_result"
+    "$kidui_bin" --pick-timer --daily "$(get_daily_timer)" > "$uilog" 2>&1
     picker_rc=$?
     log_ui_timings
 
@@ -1131,13 +1164,19 @@ pick_session_timer() {
     fi
 
     picked="$(sed -n 2p "$uiresult")"
+    daily_flag="$(sed -n 3p "$uiresult" 2>/dev/null)"
     case "$picked" in
         '' | *[!0-9]*) picked=0 ;;
+    esac
+    case "$daily_flag" in
+        1|true|TRUE|yes|on) daily_flag=1 ;;
+        *) daily_flag=0 ;;
     esac
     [ "$picked" -gt "$timer_max" ] && picked="$timer_max"
     rm -f "$uiresult"
 
     set_timer_minutes "$picked"
+    set_daily_timer "$daily_flag"
     state_write 0 0 # fresh budget for this session
     update_remaining_now
 }
@@ -1175,7 +1214,8 @@ parent_menu() {
         "$kidui_bin" --parent-menu \
             --remaining "$(timer_remaining)" \
             --brightness "$(get_brightness_pct)" \
-            --autoresume "$ar_val" > "$uilog" 2>&1
+            --autoresume "$ar_val" \
+            --daily "$(get_daily_timer)" > "$uilog" 2>&1
         menu_rc=$?
 
         # The toggle is written the instant the parent flips it (not
@@ -1211,6 +1251,20 @@ parent_menu() {
                     log "Auto-resume last game turned OFF from the parent menu."
                     ;;
             esac
+        fi
+
+        if [ -f "$daily_timer_result" ]; then
+            new_daily_val="$(sed -n 1p "$daily_timer_result")"
+            rm -f "$daily_timer_result"
+            case "$new_daily_val" in
+                1)
+                    set_daily_timer 1
+                    ;;
+                0)
+                    set_daily_timer 0
+                    ;;
+            esac
+            update_remaining_now
         fi
 
         if [ "$menu_rc" -ne 5 ] || [ "$(sed -n 1p "$uiresult")" != "MENU" ]; then

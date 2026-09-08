@@ -96,6 +96,7 @@
 #define TIMESUP_OFF_MS (5 * 60 * 1000)
 #define REMAINING_FILE "/tmp/kidmode_remaining"
 #define RESULT_FILE "/tmp/kidmode_ui_result"
+#define DAILY_TIMER_FILE "/tmp/kidmode_daily_timer_result"
 // The auto-resume toggle is reported on its own, the moment it is flipped —
 // kid_mode_loop.sh reads this file however the menu is left (a menu action,
 // Back, or B), so the setting can't be lost by exiting the "wrong" way.
@@ -117,9 +118,10 @@ typedef enum { SCREEN_CAROUSEL,
 #define MENU_NOTIMER 2
 #define MENU_BRIGHTNESS 3
 #define MENU_AUTORESUME 4
-#define MENU_CHANGEPIN 5
-#define MENU_BACK 6
-#define MENU_ROWS 7
+#define MENU_DAILYTIMER 5
+#define MENU_CHANGEPIN 6
+#define MENU_BACK 7
+#define MENU_ROWS 8
 #define TIMER_STEP 5
 #define TIMER_MAX 120
 // Brightness is picked in 10% steps and never goes fully dark (min 10%).
@@ -508,8 +510,9 @@ static void fillRect(int x, int y, int w, int h, uint32_t color)
 static void renderBase(void)
 {
     SDL_Surface *bg = theme_background();
+    SDL_Rect pos = {0, 0, g_display.width, g_display.height};
     if (bg != NULL)
-        SDL_BlitSurface(bg, NULL, screen, NULL);
+        SDL_BlitSurface(bg, NULL, screen, &pos);
     else
         fillRect(0, 0, g_display.width, g_display.height, FALLBACK_BG);
 }
@@ -782,6 +785,15 @@ static void writeBrightness(int pct)
     fclose(fp);
 }
 
+static void writeDailyTimer(int on)
+{
+    FILE *fp = fopen(DAILY_TIMER_FILE, "w");
+    if (fp == NULL)
+        return;
+    fprintf(fp, "%d\n", on ? 1 : 0);
+    fclose(fp);
+}
+
 // The parent menu is a real Onion list: full-width rows, the theme's list
 // font and selection background, and an Apps-menu-style value selector on
 // the "Add play time" row.
@@ -893,7 +905,8 @@ static void renderHoldBar(uint32_t held_ms)
     fillRect(0, 0, w, 6, accentHex());
 }
 
-static void renderPickTimer(const char *title, int minutes, bool no_off)
+static void renderPickTimer(const char *title, int minutes, bool no_off,
+                            bool daily)
 {
     renderBase();
     theme_renderHeader(screen, title, false);
@@ -921,6 +934,12 @@ static void renderPickTimer(const char *title, int minutes, bool no_off)
                         value_cy - arrow_right->h / 2};
         SDL_BlitSurface(arrow_right, NULL, screen, &pos);
     }
+
+    char daily_label[64];
+    snprintf(daily_label, sizeof(daily_label), "Refresh every day: %s",
+             daily ? "ON" : "OFF");
+    drawText(daily_label, cx, (int)(g_display.height * 0.56), font_info,
+             theme()->list.color, g_display.width - 40);
 
     drawText(no_off ? "How much play time to add?"
                     : "Play time for this session",
@@ -964,10 +983,12 @@ int main(int argc, char *argv[])
     bool menu_mode = false;
     bool pick_timer_mode = false;
     bool picker_no_off = false;
+    bool picker_daily = false;
     bool start_on_pin = false;
     int menu_timer_minutes = 0;
     int menu_remaining = -1;
     int menu_bright = -1;  // brightness shown in the menu (%); -1 = read live
+    int menu_daily_timer = 0;
     int set_brightness = -1; // headless: set brightness and exit
     int menu_autoresume = 0;  // auto-resume toggle state shown in the menu
     char pin_title[STR_MAX] = "";
@@ -982,6 +1003,11 @@ int main(int argc, char *argv[])
             pick_timer_mode = true;
         else if (strcmp(argv[i], "--no-off") == 0)
             picker_no_off = true;
+        else if (strcmp(argv[i], "--daily") == 0 && i + 1 < argc) {
+            int v = atoi(argv[++i]);
+            menu_daily_timer = v != 0;
+            picker_daily = v != 0;
+        }
         else if (strcmp(argv[i], "--start-pin") == 0)
             start_on_pin = true;
         else if (strcmp(argv[i], "--notice") == 0 && i + 1 < argc)
@@ -1081,6 +1107,13 @@ int main(int argc, char *argv[])
                                         .value_max = 1,
                                         .value = menu_autoresume,
                                         .value_formatter = formatOnOff});
+    list_addItem(&menu_list,
+                 (ListItem){.label = "Daily timer",
+                            .item_type = MULTIVALUE,
+                            .value_min = 0,
+                            .value_max = 1,
+                            .value = menu_daily_timer,
+                            .value_formatter = formatOnOff});
     list_addItem(&menu_list,
                  (ListItem){.label = "Change PIN", .item_type = ACTION});
     list_addItem(&menu_list,
@@ -1205,12 +1238,17 @@ int main(int argc, char *argv[])
                         menu_timer_minutes = picker_no_off ? TIMER_STEP : 0;
                     dirty = true;
                     break;
+                case SW_BTN_MENU:
+                    picker_daily = !picker_daily;
+                    dirty = true;
+                    break;
                 case SW_BTN_A:
                 case SW_BTN_START: {
                     char minutes_str[16];
                     snprintf(minutes_str, sizeof(minutes_str), "%d",
                              menu_timer_minutes);
-                    writeResult("TIMER", minutes_str, NULL);
+                    writeResult("TIMER", minutes_str,
+                                picker_daily ? "1" : "0");
                     exit_code = 5;
                     quit = true;
                     break;
@@ -1225,7 +1263,8 @@ int main(int argc, char *argv[])
                         // arm flow: B is the shortcut past the picker —
                         // straight into Kids Mode with no timer, which is
                         // what the NO TIMER hint promises
-                        writeResult("TIMER", "0", NULL);
+                        writeResult("TIMER", "0",
+                                    picker_daily ? "1" : "0");
                         exit_code = 5;
                         quit = true;
                     }
@@ -1262,6 +1301,9 @@ int main(int argc, char *argv[])
                                       LEVEL_STEP;
                             applyBrightness(pct);
                             writeBrightness(pct);
+                        }
+                        else if (menu_list.active_pos == MENU_DAILYTIMER) {
+                            writeDailyTimer(menu_list.items[MENU_DAILYTIMER].value);
                         }
                         dirty = true;
                     }
@@ -1480,7 +1522,8 @@ int main(int argc, char *argv[])
                 renderMenu(&menu_list, menu_remaining);
                 break;
             case SCREEN_PICKTIMER:
-                renderPickTimer(pin_title, menu_timer_minutes, picker_no_off);
+                renderPickTimer(pin_title, menu_timer_minutes, picker_no_off,
+                                picker_daily);
                 break;
             case SCREEN_CONFIRM_RESTART:
                 renderConfirmRestart(games[current].label, remaining);

@@ -935,8 +935,15 @@ static void renderPickTimer(const char *title, int minutes, bool no_off,
     }
 
     char daily_label[64];
-    snprintf(daily_label, sizeof(daily_label), "Refresh every day: %s",
-             daily ? "ON" : "OFF");
+    if (!no_off) {
+        snprintf(daily_label, sizeof(daily_label),
+                 "Refresh every day: %s  [MENU]",
+                 daily ? "ON" : "OFF");
+    }
+    else {
+        snprintf(daily_label, sizeof(daily_label), "Refresh every day: %s",
+                 daily ? "ON" : "OFF");
+    }
     drawText(daily_label, cx, (int)(g_display.height * 0.56), font_info,
              theme()->list.color, g_display.width - 40);
 
@@ -946,8 +953,7 @@ static void renderPickTimer(const char *title, int minutes, bool no_off,
              theme()->list.color, g_display.width - 40);
 
     theme_renderFooter(screen);
-    /* Hint: MENU toggles the daily-refresh state. Keep concise for footer. */
-    theme_renderStandardHint(screen, "MENU:Daily",
+    theme_renderStandardHint(screen, no_off ? "CONFIRM" : "START",
                              no_off ? "CANCEL" : "NO TIMER");
 }
 
@@ -1239,8 +1245,10 @@ int main(int argc, char *argv[])
                     dirty = true;
                     break;
                 case SW_BTN_MENU:
-                    picker_daily = !picker_daily;
-                    dirty = true;
+                    if (!picker_no_off) {
+                        picker_daily = !picker_daily;
+                        dirty = true;
+                    }
                     break;
                 case SW_BTN_A:
                 case SW_BTN_START: {
